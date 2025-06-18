@@ -1,7 +1,7 @@
 import json
 import lzma
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 import requests
 from sentence_transformers import SentenceTransformer
 import faiss
@@ -11,15 +11,19 @@ import csv
 import pickle
 from tqdm import tqdm
 
+# Type hints for FAISS
+IndexFlatL2 = faiss.IndexFlatL2
+Index = faiss.Index
+
 class MTGSearch:
     def __init__(self, config_path: str = ".cursorai"):
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
         
         self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
-        self.index = None
-        self.cards = []
-        self.card_map = {}
+        self.index: Optional[Index] = None
+        self.cards: List[Dict[str, Any]] = []
+        self.card_map: Dict[str, Dict[str, Any]] = {}
         
         # Find and load CSV filters
         csv_files = [f for f in os.listdir('.') if f.endswith('.csv')]
@@ -197,7 +201,7 @@ class MTGSearch:
         # Create FAISS index
         dimension = embeddings.shape[1]
         self.index = faiss.IndexFlatL2(dimension)
-        self.index.add(x=embeddings.astype('float32'))
+        self.index.add(x=embeddings.astype('float32'))  # type: ignore
         
         # Save index
         faiss.write_index(self.index, index_path)
@@ -211,7 +215,7 @@ class MTGSearch:
         query_embedding = self.model.encode([query], normalize_embeddings=True)
         
         # Search
-        distances, indices = self.index.search(query_embedding.astype('float32'), k)
+        distances, indices = self.index.search(query_embedding.astype('float32'), k)  # type: ignore
         
         # Get results
         results = []
