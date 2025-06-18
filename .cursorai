@@ -1,0 +1,159 @@
+# cursorai.yaml
+
+###########################
+# 1) PARAMETERS (CLI flags)
+###########################
+parameters:
+  # --params force_redownload=true
+  force_redownload: false
+  # --params force_reembed=true
+  force_reembed: false
+  # --params filter_csv=path/to/filter.csv
+  filter_csv: ""
+
+###########################
+# 2) SOURCES
+###########################
+sources:
+  # Download and cache the full AllPrintings dump
+  all_printings:
+    type: http
+    http:
+      url: https://mtgjson.com/api/v5/AllPrintings.json.xz
+      cache: true
+      # forces re-download if true
+      force: ${force_redownload}
+      output: raw_allprintings.json.xz
+
+  # Optional CSV filter list
+  filter_list:
+    type: file
+    file:
+      path: ${filter_csv}
+      format: csv
+
+###########################
+# 3) SCHEMAS
+###########################
+schemas:
+  mtg_card:
+    fields:
+      - name: scryfall_id
+        path: $.scryfallId
+      - name: multiverse_ids
+        path: $.identifiers.multiverseId  # might be list
+      - name: name
+        path: $.name
+      - name: type_line
+        path: $.type
+      - name: mana_cost
+        path: $.manaCost
+      - name: oracle_text
+        path: $.text
+      - name: flavor_text
+        path: $.flavor
+      - name: colors
+        path: $.colors
+
+###########################
+# 4) EMBEDDINGS
+###########################
+embeddings:
+  mtg_embed:
+    provider: hf
+    model: sentence-transformers/all-MiniLM-L6-v2
+    input: >
+      {{name}} || {{type_line}} || {{oracle_text}} || {{flavor_text}}
+    normalize: true
+    # cached locally, re-embed if force_reembed
+    cache: embeddings.pkl
+    force: ${force_reembed}
+
+###########################
+# 5) VECTORSTORE
+###########################
+vectorstores:
+  mtg_index:
+    type: faiss
+    embedding_source: mtg_embed
+    id_field: scryfall_id
+    index_path: mtg_index.faiss
+
+###########################
+# 6) PIPELINES
+###########################
+pipelines:
+
+  # 6a) FETCHER: download & parse AllPrintings → flatten → to mtg_card
+  fetcher:
+    - source: all_printings
+    - script:
+        language: python
+        # flatten the nested "data" object (sets → cards)
+        code: |
+          def transform(raw):
+              data = raw.get("data", {})
+              cards = []
+              for set_cards in data.values():
+                  cards.extend(set_cards)
+              return cards
+    - to_schema: mtg_card
+
+  # 6b) EMBEDDER: takes mtg_card, creates embeddings & index
+  embedder:
+    - pipeline: fetcher
+    - embed: mtg_embed
+    - index: mtg_index
+
+  # 6c) SEARCHER: filters (optional) and runs semantic search
+  searcher:
+    - pipeline: embedder
+    - script:
+        language: python
+        # apply optional CSV filter by scryfall_id
+        code: |
+          def transform(records, parameters, sources):
+              csv_path = parameters.get("filter_csv")
+              if csv_path:
+                  import csv
+                  allowed = set()
+                  with open(csv_path, newline="") as f:
+                      reader = csv.DictReader(f)
+                      for row in reader:
+                          # support multiple key variants
+                          key = row.get("Scryfall Id") or row.get("scryfall_id") or row.get("Scryfall id")
+                          if key:
+                              allowed.add(key.strip())
+                  # integrity check
+                  missing = [r for r in records if r["scryfall_id"] not in allowed]
+                  if missing:
+                      raise ValueError(f"Filtered out {len(records)-len(allowed)} cards not in CSV")
+                  return [r for r in records if r["scryfall_id"] in allowed]
+              return records
+
+  # 6d) CHAT: retrieval‐augmented semantic QA
+  mtg_search:
+    system: |
+      You are a Magic: The Gathering card assistant. 
+      You have a FAISS index of every MTG card from AllPrintings.
+      When the user asks for a theme or flavor, retrieve the top-5 matching cards and respond with:
+      • Name  
+      • Type line  
+      • Mana cost  
+      • Oracle text  
+      • Similarity score
+    user: |
+      {query}
+    pipeline: searcher
+
+###########################
+# Usage
+###########################
+# Ingest & index (downloads AllPrintings, embeds, builds FAISS):
+#   cursor run embedder \
+#     --params force_redownload=false \
+#     --params force_reembed=false
+
+# Search interactively:
+#   cursor chat mtg_search \
+#     --params filter_csv=optional_filter.csv
