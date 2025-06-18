@@ -135,10 +135,21 @@ class MTGSearch:
         # Filter cards if we have a filter
         if hasattr(self, 'allowed_ids') and self.allowed_ids:
             print(f"Filtering cards to match {len(self.allowed_ids)} allowed IDs...")
-            self.cards = [card for card in all_cards if card.get("identifiers", {}).get("scryfallId") in self.allowed_ids]
-            print(f"Filtered to {len(self.cards)} cards")
-        else:
-            self.cards = all_cards
+            all_cards = [card for card in all_cards if card.get("identifiers", {}).get("scryfallId") in self.allowed_ids]
+            print(f"Filtered to {len(all_cards)} cards")
+            
+        # Filter out duplicate cards by name, keeping the first occurrence
+        print("Filtering out duplicate cards by name...")
+        seen_names = set()
+        unique_cards = []
+        for card in all_cards:
+            name = card.get("name")
+            if name and name not in seen_names:
+                seen_names.add(name)
+                unique_cards.append(card)
+                
+        self.cards = unique_cards
+        print(f"Filtered to {len(self.cards)} unique cards")
             
         # Create card map for quick lookup
         self.card_map = {card.get("identifiers", {}).get("scryfallId"): card for card in self.cards if card.get("identifiers", {}).get("scryfallId")}
