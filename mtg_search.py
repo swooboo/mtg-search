@@ -8,6 +8,8 @@ import faiss
 import numpy as np
 import yaml
 import csv
+import pickle
+from tqdm import tqdm
 
 class MTGSearch:
     def __init__(self, config_path: str = ".cursorai"):
@@ -19,45 +21,79 @@ class MTGSearch:
         self.cards = []
         self.card_map = {}
         
-    def download_all_printings(self, force: bool = False) -> None:
-        """Download and cache the AllPrintings.json.xz file."""
+    def download_all_printings(self) -> None:
+        """Download the AllPrintings.json.xz file."""
         output_path = "raw_allprintings.json.xz"
+        pickle_path = "cards.pkl"
         
-        if not force and os.path.exists(output_path):
-            print("Using cached AllPrintings.json.xz")
+        # Skip download if we already have pickled cards
+        if os.path.exists(pickle_path):
+            print("Using existing card data from pickle file")
             return
             
         print("Downloading AllPrintings.json.xz...")
         url = "https://mtgjson.com/api/v5/AllPrintings.json.xz"
-        response = requests.get(url)
+        response = requests.get(url, stream=True)
         response.raise_for_status()
         
-        with open(output_path, 'wb') as f:
-            f.write(response.content)
+        total_size = int(response.headers.get('content-length', 0))
+        block_size = 1024
+        
+        with open(output_path, 'wb') as f, tqdm(
+            desc="Downloading",
+            total=total_size,
+            unit='iB',
+            unit_scale=True,
+            unit_divisor=1024,
+        ) as pbar:
+            for data in response.iter_content(block_size):
+                size = f.write(data)
+                pbar.update(size)
             
     def load_cards(self) -> None:
         """Load and process cards from AllPrintings.json.xz."""
+        pickle_path = "cards.pkl"
+        
+        if os.path.exists(pickle_path):
+            print("Loading cards from pickle file...")
+            with open(pickle_path, 'rb') as f:
+                self.cards = pickle.load(f)
+                self.card_map = {card.get("scryfallId"): card for card in self.cards if card.get("scryfallId")}
+            print(f"Loaded {len(self.cards)} cards")
+            return
+            
         print("Loading cards from AllPrintings.json.xz...")
         with lzma.open("raw_allprintings.json.xz", 'rt', encoding='utf-8') as f:
             data = json.load(f)
             
         # Flatten the nested data structure
         self.cards = []
-        for set_code, set_data in data.get("data", {}).items():
-            for card in set_data.get("cards", []):
-                # Add set code to card data
-                card["setCode"] = set_code
-                self.cards.append(card)
+        total_cards = sum(len(set_data.get("cards", [])) for set_data in data.get("data", {}).values())
+        
+        with tqdm(total=total_cards, desc="Loading cards") as pbar:
+            for set_code, set_data in data.get("data", {}).items():
+                for card in set_data.get("cards", []):
+                    # Add set code to card data
+                    card["setCode"] = set_code
+                    self.cards.append(card)
+                    pbar.update(1)
             
         # Create card map for quick lookup
         self.card_map = {card.get("scryfallId"): card for card in self.cards if card.get("scryfallId")}
         
+        # Save to pickle file
+        print("Saving cards to pickle file...")
+        with open(pickle_path, 'wb') as f:
+            pickle.dump(self.cards, f)
+        
         print(f"Loaded {len(self.cards)} cards")
         
-    def create_embeddings(self, force: bool = False) -> None:
+    def create_embeddings(self) -> None:
         """Create embeddings for all cards."""
-        if not force and os.path.exists("embeddings.pkl"):
-            print("Using cached embeddings")
+        embeddings_path = "embeddings.npy"
+        
+        if os.path.exists(embeddings_path):
+            print("Using existing embeddings")
             return
             
         print("Creating embeddings...")
@@ -66,13 +102,21 @@ class MTGSearch:
             text = f"{card.get('name', '')} || {card.get('type', '')} || {card.get('text', '')} || {card.get('flavor', '')}"
             texts.append(text)
             
-        embeddings = self.model.encode(texts, normalize_embeddings=True)
+        print("Encoding texts to embeddings...")
+        embeddings = self.model.encode(texts, normalize_embeddings=True, show_progress_bar=True)
         
         # Save embeddings
-        np.save("embeddings.npy", embeddings)
+        np.save(embeddings_path, embeddings)
         
     def build_index(self) -> None:
         """Build FAISS index from embeddings."""
+        index_path = "mtg_index.faiss"
+        
+        if os.path.exists(index_path):
+            print("Loading existing FAISS index...")
+            self.index = faiss.read_index(index_path)
+            return
+            
         print("Building FAISS index...")
         embeddings = np.load("embeddings.npy")
         
@@ -82,7 +126,7 @@ class MTGSearch:
         self.index.add(embeddings.astype('float32'))
         
         # Save index
-        faiss.write_index(self.index, "mtg_index.faiss")
+        faiss.write_index(self.index, index_path)
         
     def search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """Search for cards using semantic similarity."""
@@ -132,23 +176,41 @@ def main():
     searcher = MTGSearch()
     
     # Download and process data
-    searcher.download_all_printings(force=False)
+    print("Initializing MTG Search...")
+    searcher.download_all_printings()
     searcher.load_cards()
-    searcher.create_embeddings(force=False)
+    searcher.create_embeddings()
     searcher.build_index()
     
-    # Example search
-    query = "Find me some dragon cards"
-    results = searcher.search(query)
+    print("\nMTG Card Search is ready! Type 'quit' to exit.")
+    print("Enter your search query to find cards with similar flavor or theme.")
     
-    print(f"\nResults for query: '{query}'\n")
-    for result in results:
-        print(f"Name: {result['name']}")
-        print(f"Type: {result['type_line']}")
-        print(f"Mana Cost: {result['mana_cost']}")
-        print(f"Oracle Text: {result['oracle_text']}")
-        print(f"Similarity Score: {result['similarity_score']:.4f}")
-        print("-" * 80)
+    while True:
+        query = input("\nEnter your search query: ").strip()
+        
+        if query.lower() == 'quit':
+            print("Goodbye!")
+            break
+            
+        if not query:
+            print("Please enter a valid search query.")
+            continue
+            
+        try:
+            results = searcher.search(query, k=5)
+            
+            print(f"\nResults for query: '{query}'\n")
+            for i, result in enumerate(results, 1):
+                print(f"Result {i}:")
+                print(f"Name: {result['name']}")
+                print(f"Type: {result['type_line']}")
+                print(f"Mana Cost: {result['mana_cost']}")
+                print(f"Oracle Text: {result['oracle_text']}")
+                print(f"Similarity Score: {result['similarity_score']:.4f}")
+                print("-" * 80)
+                
+        except Exception as e:
+            print(f"An error occurred: {str(e)}")
 
 if __name__ == "__main__":
     main() 

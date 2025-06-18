@@ -48,4 +48,9 @@ Thumbs.db
 !.vscode/settings.json
 !.vscode/tasks.json
 !.vscode/launch.json
-!.vscode/extensions.json 
+!.vscode/extensions.json
+
+# Project specific
+*.pkl
+*.faiss
+raw_allprintings.json.xz 
