@@ -3,7 +3,6 @@ import lzma
 import os
 from typing import List, Dict, Any, Optional, Tuple
 import requests
-from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
 import yaml
@@ -11,6 +10,7 @@ import csv
 import pickle
 from tqdm import tqdm
 from nicegui import ui
+
 
 # Type hints for FAISS
 IndexFlatL2 = faiss.IndexFlatL2
@@ -22,6 +22,7 @@ class MTGSearch:
             self.config = yaml.safe_load(f)
         
         print("Loading SentenceTransformer model...")
+        from sentence_transformers import SentenceTransformer
         self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
         print("Model loaded")
         
