@@ -21,7 +21,10 @@ class MTGSearch:
         with open(config_path, 'r') as f:
             self.config = yaml.safe_load(f)
         
+        print("Loading SentenceTransformer model...")
         self.model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+        print("Model loaded")
+        
         self.index: Optional[Index] = None
         self.cards: List[Dict[str, Any]] = []
         self.card_map: Dict[str, Dict[str, Any]] = {}
