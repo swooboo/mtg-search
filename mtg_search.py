@@ -10,6 +10,7 @@ import yaml
 import csv
 import pickle
 from tqdm import tqdm
+from nicegui import ui
 
 # Type hints for FAISS
 IndexFlatL2 = faiss.IndexFlatL2
@@ -251,48 +252,60 @@ class MTGSearch:
         self.cards = [card for card in self.cards if card.get("identifiers", {}).get("scryfallId") in allowed_ids]
         self.card_map = {card.get("identifiers", {}).get("scryfallId"): card for card in self.cards}
         
-def main():
-    # Initialize search
-    searcher = MTGSearch()
-    
-    # Download and process data
-    print("Initializing MTG Search...")
-    searcher.download_all_printings()
-    searcher.load_cards()
-    searcher.create_embeddings()
-    searcher.build_index()
-    
-    print("\nMTG Card Search is ready! Type 'quit' to exit.")
-    print("Enter your search query to find cards with similar flavor or theme.")
-    
-    while True:
-        query = input("\nEnter your search query: ").strip()
-        
-        if query.lower() == 'quit':
-            print("Goodbye!")
-            break
-            
-        if not query:
-            print("Please enter a valid search query.")
-            continue
-            
-        try:
-            results = searcher.search(query, k=5)
-            
-            print(f"\nResults for query: '{query}'\n")
-            for i, result in enumerate(results, 1):
-                print(f"Result {i}:")
-                print(f"Name: {result['name']}")
-                print(f"Type: {result['type_line']}")
-                print(f"Mana Cost: {result['mana_cost']}")
-                print(f"Oracle Text: {result['oracle_text']}")
-                print(f"Scryfall ID: {result['scryfall_id']}")
-                print(f"Set: {result['set_code']}")
-                print(f"Similarity Score: {result['similarity_score']:.4f}")
-                print("-" * 80)
-                
-        except Exception as e:
-            print(f"An error occurred: {str(e)}")
+searcher = None
 
-if __name__ == "__main__":
-    main() 
+def get_searcher():
+    global searcher
+    if searcher is None:
+        searcher = MTGSearch()
+        print("Initializing MTG Search (GUI)...")
+        searcher.download_all_printings()
+        searcher.load_cards()
+        searcher.create_embeddings()
+        searcher.build_index()
+    return searcher
+
+def gui_main():
+    s = get_searcher()
+    ui.label('MTG Card Search')
+    ui.label('Type your search query to find cards with similar flavor or theme.')
+    
+    search_box = ui.input(label='Search Query')
+    results_row = ui.row().classes('w-full')
+
+    def update_results(query: str):
+        results_row.clear()
+        if not query.strip():
+            return
+        try:
+            results = s.search(query, k=5)
+            for i, result in enumerate(results, 1):
+                with results_row:
+                    card = ui.card().style('min-width: 260px; max-width: 320px; margin: 8px; padding: 8px;')
+                    with card:
+                        scryfall_id = result['scryfall_id']
+                        if scryfall_id:
+                            img_url = f"https://api.scryfall.com/cards/{scryfall_id}?format=image"
+                            card_url = f"https://scryfall.com/card/{result['set_code']}/{scryfall_id}"
+                            ui.image(img_url).style('width: 100%; height: auto; border-radius: 8px; margin-bottom: 8px;')
+                            ui.link('View on Scryfall', f'https://scryfall.com/card/{scryfall_id}', new_tab=True).style('margin-bottom: 8px; display: block;')
+                        text = f"""
+**{result['name']}**  
+*{result['type_line']}*  
+{f'Mana Cost: {result["mana_cost"]}  ' if result['mana_cost'] else ''}
+{result['oracle_text'] if result['oracle_text'] else ''}  
+Set: {result['set_code']}  
+Scryfall ID: {result['scryfall_id']}  
+Similarity: {result['similarity_score']:.4f}
+"""
+                        ui.markdown(text)
+        except Exception as e:
+            with results_row:
+                ui.markdown(f"An error occurred: {str(e)}")
+
+    search_box.on_value_change(lambda e: update_results(e.value))
+
+    ui.run(show=False, host='0.0.0.0', port=8080)
+
+if __name__ in {"__main__", "__mp_main__"}:
+    gui_main()
