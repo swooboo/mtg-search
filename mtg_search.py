@@ -288,15 +288,17 @@ def gui_main():
                             img_url = f"https://api.scryfall.com/cards/{scryfall_id}?format=image"
                             card_url = f"https://scryfall.com/card/{result['set_code']}/{scryfall_id}"
                             ui.image(img_url).style('width: 100%; height: auto; border-radius: 8px; margin-bottom: 8px;')
+                            ui.label(f"Similarity: {result['similarity_score']:.4f}")
                             ui.link('View on Scryfall', f'https://scryfall.com/card/{scryfall_id}', new_tab=True).style('margin-bottom: 8px; display: block;')
                         text = f"""
-**{result['name']}**  
+**{result['name']}**  {result["mana_cost"] if result['mana_cost'] else ''}
+
 *{result['type_line']}*  
-{f'Mana Cost: {result["mana_cost"]}  ' if result['mana_cost'] else ''}
+
 {result['oracle_text'] if result['oracle_text'] else ''}  
+
 Set: {result['set_code']}  
 Scryfall ID: {result['scryfall_id']}  
-Similarity: {result['similarity_score']:.4f}
 """
                         ui.markdown(text)
         except Exception as e:
